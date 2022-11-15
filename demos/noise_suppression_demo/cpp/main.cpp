@@ -109,12 +109,14 @@ int main(int argc, char* argv[]) {
     std::set_terminate(catcher);
     parse(argc, argv);
     ov::Core core;
+#if 0
     slog::info << "Reading model: " << FLAGS_m << slog::endl;
     std::shared_ptr<ov::Model> model = core.read_model(FLAGS_m);
     logBasicModelInfo(model);
 
     ov::OutputVector inputs = model->inputs();
     ov::OutputVector outputs = model->outputs();
+#endif
 
     const int nRows = 1081;
     const int nColumns = 256;
@@ -127,11 +129,50 @@ int main(int argc, char* argv[]) {
     }
     indat.close();
 
+    //import VPU blob
+    std::ifstream modelStream(FLAGS_m, std::ios_base::binary | std::ios_base::in);
+    if (!modelStream.is_open()) {
+        throw std::runtime_error("Cannot open model file " + FLAGS_m);
+    }
+    auto compiled_model = core.import_model(modelStream, "VPUX", {});
+    modelStream.close();
+
+    for (auto&& input : compiled_model.inputs()) {
+        std::string in_name;
+        std::string node_name;
+
+        // Workaround for "tensor has no name" issue
+        try {
+            for (const auto& name : input.get_names()) {
+                in_name += name + " , ";
+            }
+            in_name = in_name.substr(0, in_name.size() - 3);
+        } catch (const ov::Exception&) {
+        }
+
+        try {
+            node_name = input.get_node()->get_friendly_name();
+        } catch (const ov::Exception&) {
+        }
+
+        if (in_name == "") {
+            in_name = "***NO_NAME***";
+        }
+        if (node_name == "") {
+            node_name = "***NO_NAME***";
+        }
+
+        slog::info << "    " << in_name << " (node: " << node_name << ") : " << input.get_element_type() << " / "
+                   << ov::layout::get_layout(input).to_string() << " / " << input.get_partial_shape() << slog::endl;
+    }
+
+#if 0
     ov::CompiledModel compiled_model = core.compile_model(model, FLAGS_d, {});
     logCompiledModelInfo(compiled_model, FLAGS_m, FLAGS_d);
+#endif
 
     ov::InferRequest infer_request = compiled_model.create_infer_request();
-
+#if 0
     // Prepare input
     // get size of network input (patch_size)
     std::string input_name("mixture");
@@ -165,22 +206,24 @@ int main(int argc, char* argv[]) {
     for (auto&& state : infer_request.query_state()) {
         state.reset();
     }
-
+#endif
     auto start_time = std::chrono::steady_clock::now();
-    for (size_t i = 0; i < iter; ++i) {
-        ov::Tensor input_tensor(ov::element::f32, inp_shape, &inp_wave_fp32[i * patch_size]);
-        infer_request.set_tensor(input_name, input_tensor);
-
+    // for (size_t i = 0; i < iter; ++i) {
+    for (size_t i = 0; i < 20; ++i) {
+        // ov::Tensor input_tensor(ov::element::f32, inp_shape, &inp_wave_fp32[i * patch_size]);
+        //infer_request.set_tensor(input_name, input_tensor);
+        printf("i %d\n", i);
         infer_request.infer();
-
+#if 0
         {
             // process output
             float* src = infer_request.get_tensor("325").data<float>();
             float* dst = &out_wave_fp32[i * patch_size];
             std::memcpy(dst, src, patch_size * sizeof(float));
         }
+#endif
     } // for iter
-
+#if 0
     std::ofstream outdat;
     outdat.open("output.dat");
     outdat.setf(std::ios::fixed);
@@ -193,6 +236,6 @@ int main(int argc, char* argv[]) {
         outdat << std::endl;
     }
     outdat.close();
-
+#endif
     return 0;
 }
