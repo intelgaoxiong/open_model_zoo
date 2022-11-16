@@ -105,39 +105,70 @@ void write_wav(const std::string& file_name, const RiffWaveHeader& wave_header, 
 }
 }  // namespace
 
+void printInputAndOutputsInfoShort(const ov::CompiledModel& network) {
+    std::cout << "Network inputs:" << std::endl;
+    for (auto&& input : network.inputs()) {
+        std::cout << "    " << input.get_any_name() << " (node: " << input.get_node()->get_friendly_name()
+                  << ") : " << input.get_element_type() << " / " << ov::layout::get_layout(input).to_string()
+                  << std::endl;
+    }
+
+    std::cout << "Network outputs:" << std::endl;
+    for (auto&& output : network.outputs()) {
+        std::string out_name = "***NO_NAME***";
+        std::string node_name = "***NO_NAME***";
+
+        // Workaround for "tensor has no name" issue
+        try {
+            out_name = output.get_any_name();
+        } catch (const ov::Exception&) {
+        }
+        try {
+            node_name = output.get_node()->get_input_node_ptr(0)->get_friendly_name();
+        } catch (const ov::Exception&) {
+        }
+
+        std::cout << "    " << out_name << " (node: " << node_name << ") : " << output.get_element_type() << " / "
+                  << ov::layout::get_layout(output).to_string() << std::endl;
+    }
+}
+
 int main(int argc, char* argv[]) {
     std::set_terminate(catcher);
     parse(argc, argv);
     ov::Core core;
-    slog::info << "Reading model: " << FLAGS_m << slog::endl;
-    std::shared_ptr<ov::Model> model = core.read_model(FLAGS_m);
-    logBasicModelInfo(model);
 
-    ov::OutputVector inputs = model->inputs();
-    ov::OutputVector outputs = model->outputs();
+    //import VPU blob
+    std::string blobFile = FLAGS_m + "dns.blob";
+    std::ifstream modelStream(blobFile, std::ios_base::binary | std::ios_base::in);
+    if (!modelStream.is_open()) {
+        throw std::runtime_error("Cannot open model file " + blobFile);
+    }
+    auto compiled_model = core.import_model(modelStream, "VPUX", {});
+    modelStream.close();
 
+    printInputAndOutputsInfoShort(compiled_model);
+
+    ov::InferRequest infer_request = compiled_model.create_infer_request();
+
+    //read input bianry
+    std::string inputFile = FLAGS_m + "input.dat";
     const int nRows = 1081;
     const int nColumns = 256;
     float* pDat = new float[nRows * nColumns];
     std::ifstream indat;
-    indat.open("input.dat");
+    indat.open(inputFile);
     for (int i = 0; i < nRows * nColumns; i++)
     {
         indat >> pDat[i];
     }
     indat.close();
 
-    ov::CompiledModel compiled_model = core.compile_model(model, FLAGS_d, {});
-    logCompiledModelInfo(compiled_model, FLAGS_m, FLAGS_d);
-
-    ov::InferRequest infer_request = compiled_model.create_infer_request();
-
     // Prepare input
     // get size of network input (patch_size)
     std::string input_name("mixture");
-    ov::Shape inp_shape = model->input(input_name).get_shape();
+    ov::Shape inp_shape = compiled_model.input(input_name).get_shape();
     size_t patch_size = inp_shape[1];
-
     std::cout << "patch size = " << patch_size << std::endl;
 
     std::vector<float> inp_wave_fp32;
@@ -152,6 +183,7 @@ int main(int argc, char* argv[]) {
         inp_wave_fp32[i] = pDat[i];
     }
 
+    //State API implementation for VPUX
     std::vector<ov::VariableState> state_vector = infer_request.query_state();
     for (int i = 0; i < state_vector.size(); i++)
     {
